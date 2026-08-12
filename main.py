@@ -1,5 +1,6 @@
-import serial, time, csv
+import serial, time, csv, joblib
 import tkinter as tk
+import pandas as pd
 
 class FootPressureSensor:
     def __init__(self, name, port, baud_rate=115200):
@@ -8,33 +9,16 @@ class FootPressureSensor:
         self.pressures = [0] * 48
 
         self.pending_warning = None
-
-        self.total_packets = 0
-        self.total_bytes = 0
         self.bad_checksums = 0
 
-        self.packets_this_second = 0
-        self.bytes_this_second = 0
-
-        self.last_stats_time = time.time()
-
-        self.packet_rate = 0
-        self.byte_rate = 0
 
     def read_packet(self):
         while True:
             first_byte = self.serial.read(1)
-
-            self.total_bytes += len(first_byte)
-            self.bytes_this_second += len(first_byte)
-
             if first_byte != b"\x40":
                 continue
 
             remaining = self.serial.read(98)
-
-            self.total_bytes += len(remaining)
-            self.bytes_this_second += len(remaining)
 
             packet = b"\x40" + remaining
 
@@ -51,9 +35,6 @@ class FootPressureSensor:
                 print(f"{self.name}: bad checksum")
                 continue
 
-            self.total_packets += 1
-            self.packets_this_second += 1
-
             return packet
 
     def update(self):
@@ -64,30 +45,8 @@ class FootPressureSensor:
             low = packet[3 + i * 2]
             self.pressures[i] = (high << 8) | low
 
-        self.update_stats()
-
-    def update_stats(self):
-        current_time = time.time()
-
-        if current_time - self.last_stats_time >= 1:
-            elapsed = current_time - self.last_stats_time
-
-            self.packet_rate = self.packets_this_second / elapsed
-            self.byte_rate = self.bytes_this_second / elapsed
-
-            self.packets_this_second = 0
-            self.bytes_this_second = 0
-            self.last_stats_time = current_time
-
     def log(self):
-        print(
-            f"{self.name:5} | "
-            f"packets/s: {self.packet_rate:2.1f} | "
-            f"bytes/s: {self.byte_rate:4.1f} | "
-            f"in_waiting: {self.serial.in_waiting:3} | "
-            f"total packets: {self.total_packets:2} | "
-            f"bad checksums: {self.bad_checksums}"
-        )
+        print(f"{self.name:5} | in_waiting: {self.serial.in_waiting:3} | bad checksums: {self.bad_checksums}")
 
     def flush(self):
         bytes_waiting = self.serial.in_waiting
@@ -125,11 +84,10 @@ class FootGrid:
                 self.cells[sensor_number] = cell
 
     def pressure_to_color(self, pressure):
-        max_pressure = 200
-
+        max_pressure = 500
         pressure = max(0, min(pressure, max_pressure))
 
-        intensity_scale = 1
+        intensity_scale = 0.5
         intensity = (pressure / max_pressure) ** intensity_scale
 
         red = 255
@@ -179,72 +137,51 @@ right_indexes = [
     [37, 25, 13, 1]
 ]
 
+dataset = "paired2"
+DATA_FILE = f"datasets/pressure_training({dataset}).csv"
+MODEL_FILE = f"models/pressure_svm({dataset}).pkl"
+model = None
+try:
+    model = joblib.load(MODEL_FILE)
+except FileNotFoundError:
+    print("No model found")
+
+CONFIDENCE_THRESHOLD = 0.70
+
 root = tk.Tk()
 root.title("Foot Pressure Sensors")
 grids_frame = tk.Frame(root)
 grids_frame.pack()
-buttons_frame = tk.Frame(root)
-buttons_frame.pack(pady=(0, 10))
+btn_frame = tk.Frame(root)
+btn_frame.pack(pady=(0, 10))
 
 left_grid = FootGrid(grids_frame, "Left Foot", left_sensor, left_indexes)
 right_grid = FootGrid(grids_frame, "Right Foot", right_sensor, right_indexes)
 
-forward_button = tk.Button(
-    buttons_frame,
-    text="Forward",
-    width=12,
-    command=lambda: save_sample("forward")
-)
+btn_width = 10
+forward_btn = tk.Button(btn_frame, text="forward", width=btn_width, command=lambda: save_sample("forward"))
+backward_btn = tk.Button(btn_frame, text="backward", width=btn_width, command=lambda: save_sample("backward"))
+left_btn = tk.Button(btn_frame, text="strafe left", width=btn_width, command=lambda: save_sample("strafe_left"))
+right_btn = tk.Button(btn_frame, text="strafe right", width=btn_width, command=lambda: save_sample("strafe_right"))
+none_btn = tk.Button(btn_frame, text="none", width=btn_width, command=lambda: save_sample("none"))
+undo_btn = tk.Button(btn_frame, text="undo", width=btn_width, command=lambda: undo_last_sample())
+forward_btn.pack(side=tk.LEFT, padx=5)
+backward_btn.pack(side=tk.LEFT, padx=5)
+left_btn.pack(side=tk.LEFT, padx=5)
+right_btn.pack(side=tk.LEFT, padx=5)
+none_btn.pack(side=tk.LEFT, padx=5)
+undo_btn.pack(side=tk.LEFT, padx=5)
 
-backward_button = tk.Button(
-    buttons_frame,
-    text="Backward",
-    width=12,
-    command=lambda: save_sample("backward")
-)
-
-left_button = tk.Button(
-    buttons_frame,
-    text="Strafe Left",
-    width=12,
-    command=lambda: save_sample("strafe_left")
-)
-
-right_button = tk.Button(
-    buttons_frame,
-    text="Strafe Right",
-    width=12,
-    command=lambda: save_sample("strafe_right")
-)
-
-undo_button = tk.Button(
-    buttons_frame,
-    text="Undo",
-    width=12,
-    command=lambda: undo_last_sample()
-)
-
-forward_button.pack(side=tk.LEFT, padx=5)
-backward_button.pack(side=tk.LEFT, padx=5)
-left_button.pack(side=tk.LEFT, padx=5)
-right_button.pack(side=tk.LEFT, padx=5)
-undo_button.pack(side=tk.LEFT, padx=5)
+prediction_var = tk.StringVar()
+prediction_var.set("Prediction: waiting...")
+prediction_label = tk.Label(root, textvariable=prediction_var, font=("Arial", 16, "bold"), anchor="center", relief="sunken", padx=8, pady=6)
+prediction_label.pack(fill="x", padx=20, pady=(0, 10))
 
 warning_var = tk.StringVar()
-warning_var.set("No warnings")
-
-warning_label = tk.Label(
-    root,
-    textvariable=warning_var,
-    font=("Arial", 11),
-    anchor="w",
-    relief="sunken",
-    padx=8, bg="yellow"
-)
+warning_var.set("no warnings")
+warning_label = tk.Label(root, textvariable=warning_var, font=("Arial", 11), anchor="w", relief="sunken", padx=8, bg="yellow")
 warning_label.pack(fill="x", padx=20, pady=(0, 15))
 
-dataset = "paired"
-DATA_FILE = f"datasets/pressure_training({dataset}).csv"
 
 def save_sample(label):
     row = left_sensor.pressures + right_sensor.pressures + [label]
@@ -253,11 +190,7 @@ def save_sample(label):
         with open(DATA_FILE, "x", newline="") as file:
             writer = csv.writer(file)
 
-            header = (
-                [f"left_{i}" for i in range(1, 49)] +
-                [f"right_{i}" for i in range(1, 49)] +
-                ["label"]
-            )
+            header = ([f"left_{i}" for i in range(1, 49)] + [f"right_{i}" for i in range(1, 49)] + ["label"])
 
             writer.writerow(header)
             writer.writerow(row)
@@ -268,9 +201,9 @@ def save_sample(label):
             writer.writerow(row)
 
     current_time = time.strftime("%H:%M:%S")
-    warning_var.set(f"{current_time} | Saved training sample: {label}")
+    warning_var.set(f"{current_time} | saved training sample: {label}")
 
-    print(f"Saved sample: {label}")
+    print(f"saved sample: {label}")
 
 def undo_last_sample():
     try:
@@ -278,7 +211,7 @@ def undo_last_sample():
             rows = list(csv.reader(file))
 
         if len(rows) <= 1:
-            warning_var.set(f"{time.strftime('%H:%M:%S')} | WARNING: No samples to undo")
+            warning_var.set(f"{time.strftime('%H:%M:%S')} | WARNING: no samples to undo")
             return
 
         removed_row = rows.pop()
@@ -288,14 +221,34 @@ def undo_last_sample():
             writer = csv.writer(file)
             writer.writerows(rows)
 
-        warning_var.set(
-            f"{time.strftime('%H:%M:%S')} | Removed last sample: {removed_label}"
-        )
+        warning_var.set(f"{time.strftime('%H:%M:%S')} | removed last sample: {removed_label}")
 
-        print(f"Removed last sample: {removed_label}")
+        print(f"removed last sample: {removed_label}")
 
     except FileNotFoundError:
-        warning_var.set(f"{time.strftime('%H:%M:%S')} | WARNING: No training CSV found")
+        warning_var.set(f"{time.strftime('%H:%M:%S')} | WARNING: no training CSV found")
+
+def update_prediction():
+    values = left_sensor.pressures + right_sensor.pressures
+
+    columns = (
+        [f"left_{i}" for i in range(1, 49)] +
+        [f"right_{i}" for i in range(1, 49)]
+    )
+
+    sample = pd.DataFrame([values], columns=columns)
+
+    probabilities = model.predict_proba(sample)[0]
+    classes = model.classes_
+
+    best_index = probabilities.argmax()
+    prediction = classes[best_index]
+    confidence = probabilities[best_index]
+
+    if confidence >= CONFIDENCE_THRESHOLD:
+        prediction_var.set(f"Prediction: {prediction} ({confidence * 100:.1f}%)")
+    else:
+        prediction_var.set(f"No direction identified ({confidence * 100:.1f}%)")
 
 last_stats_print = time.time()
 def update_interface():
@@ -307,6 +260,11 @@ def update_interface():
     left_grid.update()
     right_grid.update()
 
+    if model is None:
+        prediction_var.set("Prediction: no model loaded")
+    else:
+        update_prediction()
+
     if left_sensor.pending_warning is not None:
         warning_var.set(left_sensor.pending_warning)
         left_sensor.pending_warning = None
@@ -316,22 +274,18 @@ def update_interface():
         right_sensor.pending_warning = None
 
     if time.time() - last_stats_print >= 1:
-        left_sensor.log()
-        right_sensor.log()
+        # left_sensor.log()
+        # right_sensor.log()
 
         if left_sensor.serial.in_waiting > 100:
             bytes_waiting = left_sensor.flush()
             current_time = time.strftime("%H:%M:%S")
-            warning_var.set(
-                f"{current_time} | WARNING: Left foot input buffer flushed | {bytes_waiting} bytes waiting"
-            )
+            warning_var.set(f"{current_time} | WARNING: left input buffer flushed ({bytes_waiting} bytes)")
 
         if right_sensor.serial.in_waiting > 100:
             bytes_waiting = right_sensor.flush()
             current_time = time.strftime("%H:%M:%S")
-            warning_var.set(
-                f"{current_time} | WARNING: Right foot input buffer flushed | {bytes_waiting} bytes waiting"
-            )
+            warning_var.set(f"{current_time} | WARNING: right input buffer flushed ({bytes_waiting} bytes)")
 
         print()
         last_stats_print = time.time()
