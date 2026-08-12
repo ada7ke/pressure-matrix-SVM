@@ -1,4 +1,4 @@
-import serial, time
+import serial, time, csv
 import tkinter as tk
 
 class FootPressureSensor:
@@ -149,7 +149,6 @@ class FootGrid:
 left_sensor = FootPressureSensor("left", "COM7")
 right_sensor = FootPressureSensor("right", "COM8")
 
-
 left_indexes = [
     [12, 24, 36, 48],
     [11, 23, 35, 47],
@@ -184,9 +183,52 @@ root = tk.Tk()
 root.title("Foot Pressure Sensors")
 grids_frame = tk.Frame(root)
 grids_frame.pack()
+buttons_frame = tk.Frame(root)
+buttons_frame.pack(pady=(0, 10))
 
 left_grid = FootGrid(grids_frame, "Left Foot", left_sensor, left_indexes)
 right_grid = FootGrid(grids_frame, "Right Foot", right_sensor, right_indexes)
+
+forward_button = tk.Button(
+    buttons_frame,
+    text="Forward",
+    width=12,
+    command=lambda: save_sample("forward")
+)
+
+backward_button = tk.Button(
+    buttons_frame,
+    text="Backward",
+    width=12,
+    command=lambda: save_sample("backward")
+)
+
+left_button = tk.Button(
+    buttons_frame,
+    text="Strafe Left",
+    width=12,
+    command=lambda: save_sample("strafe_left")
+)
+
+right_button = tk.Button(
+    buttons_frame,
+    text="Strafe Right",
+    width=12,
+    command=lambda: save_sample("strafe_right")
+)
+
+undo_button = tk.Button(
+    buttons_frame,
+    text="Undo",
+    width=12,
+    command=lambda: undo_last_sample()
+)
+
+forward_button.pack(side=tk.LEFT, padx=5)
+backward_button.pack(side=tk.LEFT, padx=5)
+left_button.pack(side=tk.LEFT, padx=5)
+right_button.pack(side=tk.LEFT, padx=5)
+undo_button.pack(side=tk.LEFT, padx=5)
 
 warning_var = tk.StringVar()
 warning_var.set("No warnings")
@@ -200,6 +242,60 @@ warning_label = tk.Label(
     padx=8, bg="yellow"
 )
 warning_label.pack(fill="x", padx=20, pady=(0, 15))
+
+dataset = "paired"
+DATA_FILE = f"datasets/pressure_training({dataset}).csv"
+
+def save_sample(label):
+    row = left_sensor.pressures + right_sensor.pressures + [label]
+
+    try:
+        with open(DATA_FILE, "x", newline="") as file:
+            writer = csv.writer(file)
+
+            header = (
+                [f"left_{i}" for i in range(1, 49)] +
+                [f"right_{i}" for i in range(1, 49)] +
+                ["label"]
+            )
+
+            writer.writerow(header)
+            writer.writerow(row)
+
+    except FileExistsError:
+        with open(DATA_FILE, "a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(row)
+
+    current_time = time.strftime("%H:%M:%S")
+    warning_var.set(f"{current_time} | Saved training sample: {label}")
+
+    print(f"Saved sample: {label}")
+
+def undo_last_sample():
+    try:
+        with open(DATA_FILE, "r", newline="") as file:
+            rows = list(csv.reader(file))
+
+        if len(rows) <= 1:
+            warning_var.set(f"{time.strftime('%H:%M:%S')} | WARNING: No samples to undo")
+            return
+
+        removed_row = rows.pop()
+        removed_label = removed_row[-1]
+
+        with open(DATA_FILE, "w", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerows(rows)
+
+        warning_var.set(
+            f"{time.strftime('%H:%M:%S')} | Removed last sample: {removed_label}"
+        )
+
+        print(f"Removed last sample: {removed_label}")
+
+    except FileNotFoundError:
+        warning_var.set(f"{time.strftime('%H:%M:%S')} | WARNING: No training CSV found")
 
 last_stats_print = time.time()
 def update_interface():
