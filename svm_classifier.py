@@ -89,7 +89,7 @@ print(f"Total speed samples: {len(spd_data)}\n")
 
 
 for direction, model_file in SPD_MODEL_FILES.items():
-    direction_data = spd_data[spd_data["direction"] == direction]
+    direction_data = spd_data[(spd_data["direction"] == direction) | (spd_data["direction"] == "none")]
 
     if len(direction_data) < 2:
         print(f"{direction}: not enough samples")
@@ -101,9 +101,9 @@ for direction, model_file in SPD_MODEL_FILES.items():
     print(direction)
     print(f"Samples: {len(direction_data)}")
     print("Speed sample counts:")
-    print(y_speed.value_counts())
+    print(y_speed.value_counts().sort_index())
 
-    X_train, X_test, y_train, y_test = train_test_split(X_speed, y_speed, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X_speed, y_speed, test_size=0.2, random_state=42, stratify=y_speed)
 
     spd_model = Pipeline([
         ("scaler", StandardScaler()),
