@@ -22,10 +22,7 @@ SPD_MODEL_FILES = {
 }
 
 
-feature_columns = (
-    [f"left_{i}" for i in range(1, 49)] +
-    [f"right_{i}" for i in range(1, 49)]
-)
+feature_columns = ([f"left_{i}" for i in range(1, 49)] + [f"right_{i}" for i in range(1, 49)])
 
 
 # ===== DIRECTION MODEL ======
@@ -41,25 +38,12 @@ print(f"Total samples: {len(dir_data)}")
 print(f"Samples per class:\n{y_dir.value_counts()}\n")
 
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X_dir,
-    y_dir,
-    test_size=0.2,
-    random_state=42,
-    stratify=y_dir
-)
+X_train, X_test, y_train, y_test = train_test_split(X_dir, y_dir, test_size=0.2, random_state=42, stratify=y_dir)
 
 
 dir_model = Pipeline([
     ("scaler", StandardScaler()),
-    ("svm", CalibratedClassifierCV(
-        SVC(
-            kernel="rbf",
-            C=10,
-            gamma="scale"
-        ),
-        ensemble=False
-    ))
+    ("svm", CalibratedClassifierCV(SVC(kernel="rbf", C=10, gamma="scale"), ensemble=False))
 ])
 
 
@@ -67,32 +51,17 @@ dir_model.fit(X_train, y_train)
 
 dir_predictions = dir_model.predict(X_test)
 
-labels = [
-    "forward",
-    "backward",
-    "strafe_left",
-    "strafe_right",
-    "none"
-]
+labels = ["forward", "backward", "strafe_left", "strafe_right", "none"]
 
 accuracy = accuracy_score(y_test, dir_predictions)
 
 print(f"Accuracy: {accuracy * 100:.2f}%\n")
 
-cr = classification_report(
-    y_test,
-    dir_predictions,
-    labels=labels,
-    target_names=labels
-)
+cr = classification_report(y_test, dir_predictions, labels=labels, target_names=labels)
 
 print(f"Classification report:\n{cr}")
 
-cm = confusion_matrix(
-    y_test,
-    dir_predictions,
-    labels=labels
-)
+cm = confusion_matrix(y_test, dir_predictions, labels=labels)
 
 print("Rows = actual, columns = predicted")
 print(f"Confusion matrix:\n{cm}")
@@ -131,27 +100,36 @@ for direction, model_file in SPD_MODEL_FILES.items():
 
     print(direction)
     print(f"Samples: {len(direction_data)}")
-    print(f"Speed values: {sorted(y_speed.unique())}")
+    print("Speed sample counts:")
+    print(y_speed.value_counts())
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_speed,
-        y_speed,
-        test_size=0.2,
-        random_state=42
-    )
+    X_train, X_test, y_train, y_test = train_test_split(X_speed, y_speed, test_size=0.2, random_state=42)
 
     spd_model = Pipeline([
         ("scaler", StandardScaler()),
-        ("svr", SVR(
-            kernel="rbf",
-            C=10,
-            gamma="scale"
-        ))
+        ("svr", SVR(kernel="linear", C=1))
     ])
 
     spd_model.fit(X_train, y_train)
+    train_predictions = spd_model.predict(X_speed)
+
+    print("50% samples:")
+    print(train_predictions[y_speed.to_numpy() == 0.5])
+
+    print("100% samples:")
+    print(train_predictions[y_speed.to_numpy() == 1.0])
 
     spd_predictions = spd_model.predict(X_test)
+    print("Actual speeds:")
+    print(y_test.to_numpy())
+
+    print("Predicted speeds:")
+    print(spd_predictions)
+
+    print(
+        f"Prediction range: "
+        f"{spd_predictions.min():.3f} - {spd_predictions.max():.3f}"
+    )
 
     mae = mean_absolute_error(y_test, spd_predictions)
 
